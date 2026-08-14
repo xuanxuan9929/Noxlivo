@@ -28,6 +28,7 @@ class SkillsSheet extends StatefulWidget {
 class _SkillsSheetState extends State<SkillsSheet> {
   List<SkillMetadata> _skills = const [];
   bool _loading = true;
+  final Set<String> _collapsedGroups = {};
 
   @override
   void initState() {
@@ -42,6 +43,60 @@ class _SkillsSheetState extends State<SkillsSheet> {
       _skills = skills;
       _loading = false;
     });
+  }
+
+  List<Widget> _buildSheetGroups(
+    Assistant assistant,
+    AppLocalizations l10n,
+    ColorScheme cs,
+  ) {
+    final groups = groupSkillsByCategory(_skills);
+
+    // Single group: skip the collapsible wrapper.
+    if (groups.length == 1) {
+      final (_, skills) = groups.first;
+      return [
+        for (final skill in skills)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _SkillSheetRow(
+              name: skill.name,
+              enabled: assistant.skillIds.contains(skill.name),
+              onChanged: (v) => _toggle(assistant, skill.name, v),
+            ),
+          ),
+      ];
+    }
+
+    return [
+      for (final (group, skills) in groups)
+        _SheetCollapsibleGroup(
+          groupKey: group ?? '',
+          title: group ?? l10n.skillsUncategorizedGroup,
+          count: skills.length,
+          initiallyExpanded: !_collapsedGroups.contains(group ?? ''),
+          onExpansionChanged: (expanded) {
+            setState(() {
+              if (expanded) {
+                _collapsedGroups.remove(group ?? '');
+              } else {
+                _collapsedGroups.add(group ?? '');
+              }
+            });
+          },
+          children: [
+            for (final skill in skills)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _SkillSheetRow(
+                  name: skill.name,
+                  enabled: assistant.skillIds.contains(skill.name),
+                  onChanged: (v) => _toggle(assistant, skill.name, v),
+                ),
+              ),
+          ],
+        ),
+    ];
   }
 
   void _toggle(Assistant assistant, String name, bool value) {
@@ -127,40 +182,76 @@ class _SkillsSheetState extends State<SkillsSheet> {
                     : ListView(
                         controller: controller,
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                        children: [
-                          for (final (group, skills) in groupSkillsByCategory(
-                            _skills,
-                          )) ...[
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(4, 10, 4, 4),
-                              child: Text(
-                                group ?? l10n.skillsUncategorizedGroup,
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: AppFontWeights.emphasis,
-                                  color: cs.onSurface.withValues(alpha: 0.55),
-                                ),
-                              ),
-                            ),
-                            for (final skill in skills)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: _SkillSheetRow(
-                                  name: skill.name,
-                                  enabled: assistant.skillIds.contains(
-                                    skill.name,
-                                  ),
-                                  onChanged: (v) =>
-                                      _toggle(assistant, skill.name, v),
-                                ),
-                              ),
-                          ],
-                        ],
+                        children: _buildSheetGroups(assistant, l10n, cs),
                       ),
               ),
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _SheetCollapsibleGroup extends StatelessWidget {
+  const _SheetCollapsibleGroup({
+    required this.groupKey,
+    required this.title,
+    required this.count,
+    required this.initiallyExpanded,
+    required this.onExpansionChanged,
+    required this.children,
+  });
+
+  final String groupKey;
+  final String title;
+  final int count;
+  final bool initiallyExpanded;
+  final ValueChanged<bool> onExpansionChanged;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: PageStorageKey<String>('skill_sheet_group_$groupKey'),
+        initiallyExpanded: initiallyExpanded,
+        onExpansionChanged: onExpansionChanged,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 4),
+        childrenPadding: EdgeInsets.zero,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        title: Row(
+          children: [
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: AppFontWeights.semibold,
+                color: cs.onSurface.withValues(alpha: 0.65),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: cs.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: AppFontWeights.medium,
+                  color: cs.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        children: children,
       ),
     );
   }
