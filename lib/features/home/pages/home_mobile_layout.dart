@@ -360,6 +360,11 @@ class MobileBackgroundLayer extends StatelessWidget {
       provider = FileImage(file);
     }
 
+    // The background lives OUTSIDE the Scaffold (see HomeMobileScaffold.build),
+    // inside the root Stack that always fills the window. The keyboard resizes
+    // only the Scaffold body, so this layer stays full-screen with no insets
+    // handling needed. Do NOT wrap this in MediaQuery.removeViewInsets — that
+    // only fakes the MediaQuery value and does not affect layout constraints.
     return Positioned.fill(
       child: Stack(
         children: [
