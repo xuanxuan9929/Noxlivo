@@ -117,7 +117,12 @@ jobs:
           echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
           echo "✅ 签名配置已写入"
       - name: 🏗️ 构建 APK
-        run: flutter build apk --release --split-per-abi
+        run: |
+          if [ ! -f android/key.properties ]; then
+            echo 'No release keystore found, configuring debug signing for release build...'
+            sed -i 's/signingConfig = signingConfigs.getByName("release")/signingConfig = signingConfigs.getByName("debug")/g' android/app/build.gradle.kts
+          fi
+          flutter build apk --release --split-per-abi
 
       - name: 📦 重命名 APK
         run: |
