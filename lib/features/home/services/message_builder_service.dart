@@ -26,6 +26,9 @@ import '../../../core/services/api/builtin_tools.dart';
 import '../../../core/memory/cross_window_memory_store.dart';
 import '../../../core/memory/memory_bank_service.dart';
 import '../../../core/memory/three_layer_memory_policy.dart';
+import '../../../core/memory/memory_write_judge.dart';
+import '../../../core/memory/memory_merge_detector.dart';
+import '../../../core/memory/memory_candidate.dart';
 import '../../../core/models/assistant_regex.dart';
 import '../../../core/utils/multimodal_input_utils.dart';
 import '../../model/utils/ocr_model_capability.dart';
@@ -760,9 +763,11 @@ These memories are automatically included in future conversation contexts within
       try {
         await mp.initialize();
         final mems = mp.getForAssistant(assistant.id);
+        final recentTurns = _recentHistoryTexts(apiMessages);
         final selected = ThreeLayerMemoryPolicy.selectLongTermMemories(
           memories: mems,
           query: _lastUserText(apiMessages),
+          recentHistory: recentTurns,
           limit: assistant.longTermMemoryRecallCount,
           maxChars: assistant.longTermMemoryMaxChars,
         );
@@ -800,6 +805,20 @@ These memories are automatically included in future conversation contexts within
     return '';
   }
 
+  /// Pull up to 4 recent message texts out of [apiMessages] for multi-turn query context.
+  List<String> _recentHistoryTexts(List<Map<String, dynamic>> apiMessages) {
+    final list = <String>[];
+    for (var i = apiMessages.length - 1; i >= 0; i--) {
+      final msg = apiMessages[i];
+      final content = (msg['content'] ?? '').toString().trim();
+      if (content.isNotEmpty) {
+        list.insert(0, content);
+        if (list.length >= 4) break;
+      }
+    }
+    return list;
+  }
+
   /// Feed a single chat message into the 3-layer persistence paths.
   ///
   /// Best-effort — failures are swallowed so a write hiccup never breaks
@@ -835,6 +854,65 @@ These memories are automatically included in future conversation contexts within
         assistantId: assistant.id,
         conversationId: conversationId,
       );
+
+      // Auto-write explicit user intents into MemoryProvider (Channel A)
+      if (role == 'user') {
+        final decision = MemoryWriteJudge.evaluateExplicit(cleanText);
+        if (decision != null &&
+            decision.shouldRemember &&
+            decision.status == MemoryDecisionStatus.active) {
+          try {
+            final mp = contextProvider.read<MemoryProvider>();
+            await mp.initialize();
+            final existing = mp.getForAssistant(assistant.id);
+            final now = DateTime.now();
+            final candidates = existing
+                .map((m) => MemoryCandidate(
+                      id: m.id.toString(),
+                      assistantId: m.assistantId,
+                      content: m.content,
+                      status: CandidateStatus.active,
+                      createdAt: now,
+                      lastSeenAt: now,
+                    ))
+                .toList();
+
+            final incoming = MemoryCandidate(
+              id: 'new',
+              assistantId: assistant.id,
+              content: decision.memoryContent,
+              status: CandidateStatus.active,
+              source: CandidateSource.userExplicit,
+              confidence: decision.confidence,
+              importance: decision.importance,
+              type: decision.type,
+              key: decision.key,
+              value: decision.value,
+              createdAt: now,
+              lastSeenAt: now,
+            );
+
+            final mergeResult = MemoryMergeDetector.process(
+              incoming: incoming,
+              existingPool: candidates,
+            );
+
+            if (mergeResult.action == MergeAction.supersededOldKey &&
+                mergeResult.supersededCandidate != null) {
+              final oldId = int.tryParse(mergeResult.supersededCandidate!.id);
+              if (oldId != null) {
+                await mp.update(id: oldId, content: decision.memoryContent);
+              } else {
+                await mp.add(assistantId: assistant.id, content: decision.memoryContent);
+              }
+            } else if (mergeResult.action == MergeAction.added) {
+              await mp.add(assistantId: assistant.id, content: decision.memoryContent);
+            }
+          } catch (_) {
+            // best-effort auto-write
+          }
+        }
+      }
     } catch (_) {
       // best-effort
     }
